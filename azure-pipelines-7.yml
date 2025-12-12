@@ -4,127 +4,53 @@ trigger:
 pool:
   name: 'Pool'
 
-stages:
-- stage: Build
-  jobs:
-  - job: Build
-    steps:
-    - checkout: self
-    
-    - powershell: |
-        # Настраиваем Maven
-        $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
-        $env:PATH = "$mavenPath;" + $env:PATH
-        
-        Write-Host "=== Building with Maven ==="
-        mvn clean package -DskipTests
-        
-        Write-Host "=== Finding created JAR ==="
-        $jarFiles = Get-ChildItem -Path "." -Filter "*.jar" -Recurse -File
-        
-        if ($jarFiles.Count -eq 0) {
-            Write-Error "No JAR files found after build!"
-            Write-Host "Searching in target directory..."
-            if (Test-Path "target") {
-                Get-ChildItem -Path "target" -Recurse | Format-Table FullName, Length
-            }
-            exit 1
-        }
-        
-        Write-Host "Found $($jarFiles.Count) JAR file(s):"
-        $jarFiles | ForEach-Object {
-            Write-Host "  - $($_.FullName) ($([math]::Round($_.Length/1KB, 2)) KB)"
-        }
-        
-        # Выбираем основной JAR (не sources, не javadoc, не original)
-        $mainJar = $jarFiles | 
-                   Where-Object { 
-                       $_.Name -notmatch "(sources|javadoc|original|-tests)" -and
-                       $_.DirectoryName -like "*target*"
-                   } | 
-                   Select-Object -First 1
-        
-        if (-not $mainJar) {
-            $mainJar = $jarFiles | Select-Object -First 1
-        }
-        
-        Write-Host "Selected main JAR: $($mainJar.FullName)"
-        
-        # Копируем JAR в staging directory
-        $stagingDir = "$(Build.ArtifactStagingDirectory)"
-        New-Item -ItemType Directory -Force -Path $stagingDir
-        
-        Copy-Item -Path $mainJar.FullName -Destination $stagingDir -Force
-        Write-Host "Copied to: $stagingDir\$($mainJar.Name)"
-        
-        # Сохраняем имя JAR в переменную
-        Write-Host "##vso[task.setvariable variable=JAR_NAME]$($mainJar.Name)"
-        Write-Host "##vso[task.setvariable variable=JAR_PATH]$($mainJar.FullName)"
-      displayName: 'Build and Prepare JAR'
-    
-    - powershell: |
-        Write-Host "=== Verifying artifact directory ==="
-        $stagingDir = "$(Build.ArtifactStagingDirectory)"
-        
-        Write-Host "Artifact directory: $stagingDir"
-        Write-Host "Contents:"
-        Get-ChildItem -Path $stagingDir -Recurse | Format-Table FullName, Length
-        
-        # Подсчитываем JAR файлы
-        $jarCount = (Get-ChildItem -Path $stagingDir -Filter "*.jar" -Recurse).Count
-        Write-Host "Total JAR files in artifacts: $jarCount"
-        
-        if ($jarCount -eq 0) {
-            Write-Error "No JAR files in artifact directory!"
-            exit 1
-        }
-      displayName: 'Verify Artifacts'
-    
-    - publish: '$(Build.ArtifactStagingDirectory)'
-      artifact: 'java-bot'
-      displayName: 'Publish JAR'
+steps:
+- checkout: self
 
-- stage: Run
-  dependsOn: Build
-  jobs:
-  - job: Run
-    steps:
-    - download: current
-      artifact: 'java-bot'
-      displayName: 'Download JAR'
+- powershell: |
+    # Настраиваем Maven
+    $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
+    $env:PATH = "$mavenPath;" + $env:PATH
     
-    - powershell: |
-        Write-Host "=== Current directory after download ==="
-        Write-Host "Working directory: $(Get-Location)"
-        
-        Write-Host "`n=== All files in current directory ==="
-        Get-ChildItem -Path . -Recurse | Format-Table FullName, Length
-        
-        Write-Host "`n=== Looking for JAR files ==="
-        $jarFiles = Get-ChildItem -Path . -Filter "*.jar" -Recurse -File
-        
-        if ($jarFiles.Count -eq 0) {
-            Write-Error "CRITICAL: No JAR files found after download!"
-            Write-Host "Directory tree:"
-            Get-ChildItem -Path . -Recurse | Select-Object FullName
-            exit 1
+    Write-Host "=== Step 1: Build project ==="
+    mvn clean package -DskipTests
+    
+    Write-Host "`n=== Step 2: Find the JAR ==="
+    # Ищем ВСЕ JAR файлы
+    $allJars = Get-ChildItem -Path . -Filter "*.jar" -Recurse -File
+    
+    if ($allJars.Count -eq 0) {
+        Write-Error "No JAR files created!"
+        Write-Host "Checking target directory..."
+        if (Test-Path "target") {
+            Get-ChildItem -Path "target" -Recurse
         }
-        
-        Write-Host "Found $($jarFiles.Count) JAR file(s):"
-        $jarFiles | ForEach-Object {
-            Write-Host "  - $($_.FullName) ($([math]::Round($_.Length/1KB, 2)) KB)"
-        }
-        
-        # Выбираем JAR для запуска
-        $jarToRun = $jarFiles | Select-Object -First 1
-        Write-Host "`n=== Selected JAR: $($jarToRun.FullName) ==="
-        
-        Write-Host "`n=== Java Version ==="
-        java -version
-        
-        Write-Host "`n=== Starting Application ==="
-        Write-Host "========================================"
-        
-        # Запускаем приложение
-        java -jar $jarToRun.FullName
-      displayName: 'Run Java Application'
+        exit 1
+    }
+    
+    Write-Host "Found $($allJars.Count) JAR file(s):"
+    $allJars | ForEach-Object {
+        Write-Host "  - $($_.FullName) ($([math]::Round($_.Length/1KB, 2)) KB)"
+    }
+    
+    # Выбираем основной JAR (из target, не sources/javadoc)
+    $mainJar = $allJars | 
+               Where-Object { 
+                   $_.DirectoryName -like "*target*" -and
+                   $_.Name -notmatch "(sources|javadoc|original|-tests\.jar$)"
+               } | 
+               Select-Object -First 1
+    
+    if (-not $mainJar) {
+        Write-Host "No main JAR found, using first JAR"
+        $mainJar = $allJars[0]
+    }
+    
+    Write-Host "`n=== Step 3: Running $($mainJar.Name) ==="
+    Write-Host "Full path: $($mainJar.FullName)"
+    Write-Host "Size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
+    Write-Host "========================================"
+    
+    # Запускаем
+    java -jar $mainJar.FullName
+  displayName: 'Build and Run Directly'
