@@ -12,56 +12,45 @@ stages:
     - checkout: self
     
     - powershell: |
-        # Настройка Maven
         $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
         $env:PATH = "$mavenPath;" + $env:PATH
         
-        # Сборка
+        # Собираем
         mvn clean package -DskipTests
         
-        # Проверка
+        # Сохраняем путь к JAR в переменную
         $jarFile = Get-ChildItem -Path "target" -Filter "*.jar" -File | Select-Object -First 1
-        if (-not $jarFile) {
-            Write-Error "JAR not created!"
-            exit 1
-        }
-        
-        Write-Host "JAR created: $($jarFile.Name)"
-        
-        # Копируем JAR в специальную папку для артефактов
-        $artifactDir = "$(Pipeline.Workspace)/artifacts"
-        New-Item -ItemType Directory -Force -Path $artifactDir
-        Copy-Item -Path $jarFile.FullName -Destination $artifactDir -Force
-      displayName: 'Build JAR'
-    
-    # Публикуем как pipeline artifact (не build artifact)
-    - task: PublishPipelineArtifact@1
-      inputs:
-        targetPath: '$(Pipeline.Workspace)/artifacts'
-        artifact: 'java-bot'
-        publishLocation: 'pipeline'
+        Write-Host "##vso[task.setvariable variable=JAR_PATH;isOutput=true]$($jarFile.FullName)"
+        Write-Host "##vso[task.setvariable variable=JAR_NAME;isOutput=true]$($jarFile.Name)"
+      displayName: 'Build'
+      name: BuildStep
 
 - stage: Run
   dependsOn: Build
   jobs:
   - job: Run
     steps:
-    # Скачиваем pipeline artifact
-    - task: DownloadPipelineArtifact@2
-      inputs:
-        artifact: 'java-bot'
-        path: '$(Pipeline.Workspace)/downloaded'
+    - checkout: self  # Снова чекаутим тот же код
     
     - powershell: |
-        Write-Host "=== Downloaded files ==="
-        Get-ChildItem -Path "$(Pipeline.Workspace)/downloaded" -Recurse
+        # Получаем переменные из предыдущего stage
+        $jarPath = "$(BuildStep.JAR_PATH)"
+        $jarName = "$(BuildStep.JAR_NAME)"
         
-        $jarFile = Get-ChildItem -Path "$(Pipeline.Workspace)/downloaded" -Filter "*.jar" -File | Select-Object -First 1
+        Write-Host "JAR from previous stage: $jarName"
         
-        if ($jarFile) {
-            Write-Host "Running: $($jarFile.FullName)"
-            java -jar $jarFile.FullName
+        # Снова собираем (или ищем собранный JAR)
+        if (Test-Path $jarPath) {
+            Write-Host "JAR exists at: $jarPath"
+            java -jar $jarPath
         } else {
-            Write-Error "JAR not found in downloaded artifacts"
+            Write-Host "JAR not found, rebuilding..."
+            $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
+            $env:PATH = "$mavenPath;" + $env:PATH
+            
+            mvn clean package -DskipTests
+            
+            $jarFile = Get-ChildItem -Path "target" -Filter "*.jar" -File | Select-Object -First 1
+            java -jar $jarFile.FullName
         }
-      displayName: 'Run Bot'
+      displayName: 'Run Application'
