@@ -5,52 +5,51 @@ pool:
   name: 'Pool'
 
 stages:
-- stage: Build
+- stage: BuildAndRun
+  displayName: 'Build and Run'
   jobs:
-  - job: Build
+  - job: Execute
     steps:
     - checkout: self
     
     - powershell: |
+        Write-Host "=== Step 1: Setup Maven ==="
         $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
         $env:PATH = "$mavenPath;" + $env:PATH
         
-        # Собираем
+        Write-Host "=== Step 2: Build ==="
         mvn clean package -DskipTests
         
-        # Сохраняем путь к JAR в переменную
-        $jarFile = Get-ChildItem -Path "target" -Filter "*.jar" -File | Select-Object -First 1
-        Write-Host "##vso[task.setvariable variable=JAR_PATH;isOutput=true]$($jarFile.FullName)"
-        Write-Host "##vso[task.setvariable variable=JAR_NAME;isOutput=true]$($jarFile.Name)"
-      displayName: 'Build'
-      name: BuildStep
-
-- stage: Run
-  dependsOn: Build
-  jobs:
-  - job: Run
-    steps:
-    - checkout: self  # Снова чекаутим тот же код
-    
-    - powershell: |
-        # Получаем переменные из предыдущего stage
-        $jarPath = "$(BuildStep.JAR_PATH)"
-        $jarName = "$(BuildStep.JAR_NAME)"
+        Write-Host "=== Step 3: Find JAR ==="
+        # Ищем JAR в target
+        $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -File
         
-        Write-Host "JAR from previous stage: $jarName"
-        
-        # Снова собираем (или ищем собранный JAR)
-        if (Test-Path $jarPath) {
-            Write-Host "JAR exists at: $jarPath"
-            java -jar $jarPath
-        } else {
-            Write-Host "JAR not found, rebuilding..."
-            $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
-            $env:PATH = "$mavenPath;" + $env:PATH
-            
-            mvn clean package -DskipTests
-            
-            $jarFile = Get-ChildItem -Path "target" -Filter "*.jar" -File | Select-Object -First 1
-            java -jar $jarFile.FullName
+        if ($jarFiles.Count -eq 0) {
+            Write-Error "No JAR files in target directory!"
+            Write-Host "Checking entire project..."
+            Get-ChildItem -Path . -Recurse | Format-Table FullName, Length
+            exit 1
         }
-      displayName: 'Run Application'
+        
+        Write-Host "Found $($jarFiles.Count) JAR file(s):"
+        $jarFiles | ForEach-Object {
+            Write-Host "  - $($_.Name) ($([math]::Round($_.Length/1KB, 2)) KB)"
+        }
+        
+        # Выбираем основной JAR (не sources/javadoc/original)
+        $mainJar = $jarFiles | 
+                   Where-Object { $_.Name -notmatch "(sources|javadoc|original)" } | 
+                   Select-Object -First 1
+        
+        if (-not $mainJar) {
+            $mainJar = $jarFiles[0]
+        }
+        
+        Write-Host "=== Step 4: Run $($mainJar.Name) ==="
+        Write-Host "Path: $($mainJar.FullName)"
+        Write-Host "Size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
+        Write-Host "========================================"
+        
+        # Запускаем приложение
+        java -jar $mainJar.FullName
+      displayName: 'Build and Run Java Bot'
