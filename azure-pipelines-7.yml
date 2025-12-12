@@ -5,51 +5,89 @@ pool:
   name: 'Pool'
 
 stages:
-- stage: BuildAndRun
-  displayName: 'Build and Run'
+- stage: Build
+  displayName: '📦 Build'
   jobs:
-  - job: Execute
+  - job: BuildJar
     steps:
     - checkout: self
     
     - powershell: |
-        Write-Host "=== Step 1: Setup Maven ==="
+        # Настройка Maven
         $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
         $env:PATH = "$mavenPath;" + $env:PATH
         
-        Write-Host "=== Step 2: Build ==="
+        Write-Host "Building with Maven..."
         mvn clean package -DskipTests
         
-        Write-Host "=== Step 3: Find JAR ==="
-        # Ищем JAR в target
-        $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -File
+        # Находим JAR
+        $jarFile = Get-ChildItem -Path "target" -Filter "*.jar" -File | 
+                   Where-Object { $_.Name -notlike "*-original.*" } | 
+                   Select-Object -First 1
         
-        if ($jarFiles.Count -eq 0) {
-            Write-Error "No JAR files in target directory!"
-            Write-Host "Checking entire project..."
-            Get-ChildItem -Path . -Recurse | Format-Table FullName, Length
+        if (-not $jarFile) {
+            Write-Error "JAR not created!"
             exit 1
         }
         
-        Write-Host "Found $($jarFiles.Count) JAR file(s):"
-        $jarFiles | ForEach-Object {
-            Write-Host "  - $($_.Name) ($([math]::Round($_.Length/1KB, 2)) KB)"
+        Write-Host "JAR created: $($jarFile.Name)"
+        
+        # Копируем JAR в папку для артефактов
+        $artifactDir = "$(Pipeline.Workspace)/artifacts"
+        New-Item -ItemType Directory -Force -Path $artifactDir
+        Copy-Item -Path $jarFile.FullName -Destination $artifactDir -Force
+        
+        Write-Host "Copied to: $artifactDir"
+      displayName: 'Build JAR'
+    
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Artifact'
+      inputs:
+        targetPath: '$(Pipeline.Workspace)/artifacts'
+        artifact: 'java-bot'
+        publishLocation: 'pipeline'
+
+- stage: Run
+  displayName: '🚀 Run'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: RunBot
+    steps:
+    # Скачиваем pipeline artifact
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download JAR'
+      inputs:
+        artifact: 'java-bot'
+        path: '$(System.DefaultWorkingDirectory)/downloaded'
+    
+    - powershell: |
+        Write-Host "=== Current directory ==="
+        Write-Host "$(Get-Location)"
+        
+        Write-Host "`n=== Looking for downloaded files ==="
+        # Проверяем в явном пути
+        $downloadPath = "$(System.DefaultWorkingDirectory)/downloaded"
+        Write-Host "Download path: $downloadPath"
+        
+        if (Test-Path $downloadPath) {
+            Write-Host "Files in download path:"
+            Get-ChildItem -Path $downloadPath -Recurse
+            
+            $jarFile = Get-ChildItem -Path $downloadPath -Filter "*.jar" -Recurse -File | Select-Object -First 1
+        } else {
+            Write-Host "Download path not found, searching everywhere..."
+            $jarFile = Get-ChildItem -Path . -Filter "*.jar" -Recurse -File | Select-Object -First 1
         }
         
-        # Выбираем основной JAR (не sources/javadoc/original)
-        $mainJar = $jarFiles | 
-                   Where-Object { $_.Name -notmatch "(sources|javadoc|original)" } | 
-                   Select-Object -First 1
-        
-        if (-not $mainJar) {
-            $mainJar = $jarFiles[0]
+        if ($jarFile) {
+            Write-Host "`n=== Found JAR: $($jarFile.FullName) ==="
+            Write-Host "Starting application..."
+            Write-Host "========================================"
+            java -jar $jarFile.FullName
+        } else {
+            Write-Error "JAR not found after download!"
+            Write-Host "All files in current directory:"
+            Get-ChildItem -Path . -Recurse | Select-Object FullName
         }
-        
-        Write-Host "=== Step 4: Run $($mainJar.Name) ==="
-        Write-Host "Path: $($mainJar.FullName)"
-        Write-Host "Size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
-        Write-Host "========================================"
-        
-        # Запускаем приложение
-        java -jar $mainJar.FullName
-      displayName: 'Build and Run Java Bot'
+      displayName: 'Run Bot'
