@@ -22,11 +22,6 @@ stages:
         Write-Host "=== Checking target directory ==="
         if (Test-Path "target") {
             Write-Host "target directory exists"
-            $targetFiles = Get-ChildItem -Path "target" -Recurse
-            Write-Host "Files in target: $($targetFiles.Count)"
-            $targetFiles | Format-Table Name, Length, Directory
-            
-            # Ищем JAR файлы
             $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -Recurse
             Write-Host "JAR files found: $($jarFiles.Count)"
             $jarFiles | ForEach-Object {
@@ -50,7 +45,7 @@ stages:
         }
         
         # Находим и копируем JAR файлы
-        $jarFiles = Get-ChildItem -Path "." -Filter "*.jar" -Recurse -File
+        $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -Recurse -File
         
         if ($jarFiles.Count -eq 0) {
             Write-Error "No JAR files found to copy!"
@@ -81,11 +76,10 @@ stages:
   jobs:
   - job: Run
     steps:
+    # Правильный синтаксис для download task
     - download: current
+      artifact: java-bot-jar
       displayName: 'Download artifact'
-      inputs:
-        artifact: 'java-bot-jar'
-        patterns: '**/*.jar'
     
     - powershell: |
         Write-Host "=== Current working directory ==="
@@ -95,7 +89,7 @@ stages:
         Get-ChildItem -Path . -Recurse | Format-Table FullName, Length
         
         Write-Host "`n=== SPECIFICALLY LOOKING FOR .JAR FILES ==="
-        $jarFiles = Get-ChildItem -Path . -Filter "*.jar" -Recurse -File -ErrorAction SilentlyContinue
+        $jarFiles = Get-ChildItem -Path . -Filter "*.jar" -Recurse -File
         
         if ($jarFiles.Count -eq 0) {
             Write-Host "NO JAR FILES FOUND! Listing all files with extensions:"
@@ -122,18 +116,8 @@ stages:
         
         Write-Host "`n=== RUNNING: $($mainJar.Name) ==="
         Write-Host "Full path: $($mainJar.FullName)"
-        Write-Host "File exists: $(Test-Path $mainJar.FullName)"
-        Write-Host "File size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
         Write-Host "========================================"
         
-        # Проверяем манифест JAR
-        Write-Host "`nChecking JAR manifest..."
-        try {
-            & "jar" tf $mainJar.FullName | Select-Object -First 10
-        } catch {
-            Write-Host "Cannot list JAR contents"
-        }
-        
-        Write-Host "`n=== Starting Java application ==="
+        # Запускаем приложение
         java -jar $mainJar.FullName
       displayName: 'Run Java Bot'
