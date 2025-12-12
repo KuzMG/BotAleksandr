@@ -14,8 +14,6 @@ stages:
     - powershell: |
         Write-Host "Checking tools..."
         java -version
-        mvn --version
-
 
         Write-Host "=== Current PATH ==="
         $env:PATH -split ';' | ForEach-Object { Write-Host $_ }
@@ -29,7 +27,6 @@ stages:
         $env:PATH -split ';' | Select-Object -First 10 | ForEach-Object { Write-Host $_ }
         Write-Host "====================="
         
-        # Проверяем
         mvn --version   
         Write-Host "Building application..."
         mvn clean package -DskipTests
