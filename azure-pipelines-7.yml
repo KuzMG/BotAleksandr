@@ -1,0 +1,54 @@
+trigger:
+- main
+
+pool:
+  name: 'Pool'
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build
+    steps:
+    - checkout: self
+    
+    - powershell: |
+        Write-Host "Checking tools..."
+        java -version
+        mvn --version
+        
+        Write-Host "Building application..."
+        mvn clean package -DskipTests
+        
+        $jarFile = Get-ChildItem -Path . -Recurse -Filter "*.jar" -File | 
+                   Where-Object {$_.DirectoryName -like "*target*"} | 
+                   Select-Object -First 1
+        
+        if ($jarFile) {
+          Write-Host "JAR created: $($jarFile.FullName)"
+          Write-Host "##vso[task.setvariable variable=JarPath]$($jarFile.FullName)"
+        }
+      displayName: 'Build with Maven'
+    
+    - publish: 'target'
+      artifact: 'windows-jar'
+
+- stage: Run
+  dependsOn: Build
+  jobs:
+  - job: Run
+    steps:
+    - download: current
+      artifact: 'windows-jar'
+    
+    - powershell: |
+        $jarFile = Get-ChildItem -Path . -Recurse -Filter "*.jar" -File | 
+                   Select-Object -First 1
+        
+        if ($jarFile) {
+          Write-Host "Running: $($jarFile.FullName)"
+          java -jar $jarFile.FullName
+        } else {
+          Write-Error "No JAR file found"
+          exit 1
+        }
+      displayName: 'Run Application'
