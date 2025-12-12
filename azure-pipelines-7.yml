@@ -12,37 +12,77 @@ stages:
     - checkout: self
     
     - powershell: |
-        Write-Host "Checking tools..."
+        Write-Host "=== Java Version ==="
         java -version
-
-        Write-Host "=== Current PATH ==="
-        $env:PATH -split ';' | ForEach-Object { Write-Host $_ }
-        Write-Host "====================="
         
+        Write-Host "=== Adding Maven to PATH ==="
         $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
         $env:PATH = "$mavenPath;" + $env:PATH
         [Environment]::SetEnvironmentVariable("PATH", $env:PATH, "Process")
         
-        Write-Host "=== Updated PATH ==="
-        $env:PATH -split ';' | Select-Object -First 10 | ForEach-Object { Write-Host $_ }
-        Write-Host "====================="
+        Write-Host "=== Maven Version ==="
+        mvn --version
         
-        mvn --version   
-        Write-Host "Building application..."
-        mvn clean package -DskipTests
+        Write-Host "=== Checking project structure ==="
+        Get-ChildItem -Recurse -Depth 2 | Select-Object Name, FullName
         
-        $jarFile = Get-ChildItem -Path . -Recurse -Filter "*.jar" -File | 
-                   Where-Object {$_.DirectoryName -like "*target*"} | 
-                   Select-Object -First 1
+        Write-Host "=== Checking for pom.xml ==="
+        if (Test-Path "pom.xml") {
+            Write-Host "pom.xml found at: $(Get-Location)\pom.xml"
+            Get-Content pom.xml | Select-Object -First 20
+        } else {
+            Write-Error "pom.xml not found!"
+            Get-ChildItem -Filter "*.xml" -Recurse
+        }
+      displayName: 'Debug project structure'
+    
+    - powershell: |
+        Write-Host "=== Running Maven Clean ==="
+        mvn clean
         
-        if ($jarFile) {
-          Write-Host "JAR created: $($jarFile.FullName)"
-          Write-Host "##vso[task.setvariable variable=JarPath]$($jarFile.FullName)"
+        Write-Host "=== Running Maven Compile ==="
+        mvn compile
+        
+        Write-Host "=== Running Maven Package ==="
+        mvn package -DskipTests
+        
+        Write-Host "=== Checking target directory ==="
+        if (Test-Path "target") {
+            Get-ChildItem -Path "target" -Recurse | Format-Table Name, Length, LastWriteTime
+        } else {
+            Write-Error "target directory not created!"
         }
       displayName: 'Build with Maven'
     
-    - publish: 'target'
-      artifact: 'windows-jar'
+    - task: CopyFiles@2
+      displayName: 'Copy JAR files'
+      inputs:
+        SourceFolder: '$(System.DefaultWorkingDirectory)'
+        Contents: '**/target/*.jar'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+        CleanTargetFolder: true
+        OverWrite: true
+    
+    - powershell: |
+        Write-Host "=== Checking artifact directory ==="
+        if (Test-Path "$(Build.ArtifactStagingDirectory)") {
+            $files = Get-ChildItem -Path "$(Build.ArtifactStagingDirectory)" -Recurse
+            if ($files.Count -gt 0) {
+                Write-Host "Artifacts found:"
+                $files | Format-Table FullName, Length
+                $jarCount = ($files | Where-Object { $_.Extension -eq '.jar' }).Count
+                Write-Host "Total JAR files: $jarCount"
+            } else {
+                Write-Warning "No files in artifact directory"
+            }
+        } else {
+            Write-Error "Artifact directory not found!"
+        }
+      displayName: 'Verify artifacts'
+    
+    - publish: '$(Build.ArtifactStagingDirectory)'
+      artifact: 'java-application'
+      displayName: 'Publish artifacts'
 
 - stage: Run
   dependsOn: Build
@@ -50,17 +90,42 @@ stages:
   - job: Run
     steps:
     - download: current
-      artifact: 'windows-jar'
+      artifact: 'java-application'
+      displayName: 'Download artifact'
     
     - powershell: |
-        $jarFile = Get-ChildItem -Path . -Recurse -Filter "*.jar" -File | 
+        Write-Host "=== Downloaded artifacts ==="
+        Get-ChildItem -Path . -Recurse | Format-Table FullName, Length
+        
+        Write-Host "=== Looking for JAR files ==="
+        $jarFiles = Get-ChildItem -Path . -Filter "*.jar" -Recurse -File
+        
+        if ($jarFiles.Count -eq 0) {
+            Write-Error "No JAR files found in downloaded artifacts!"
+            Write-Host "Current directory: $(Get-Location)"
+            Write-Host "All files:"
+            Get-ChildItem -Path . -Recurse | Select-Object FullName
+            exit 1
+        }
+        
+        Write-Host "Found $($jarFiles.Count) JAR file(s):"
+        $jarFiles | ForEach-Object { Write-Host "  - $($_.FullName)" }
+        
+        # Выбираем основной JAR (исключаем *-original.jar и *-sources.jar)
+        $mainJar = $jarFiles | 
+                   Where-Object { $_.Name -notmatch "(original|sources|javadoc)" } | 
                    Select-Object -First 1
         
-        if ($jarFile) {
-          Write-Host "Running: $($jarFile.FullName)"
-          java -jar $jarFile.FullName
-        } else {
-          Write-Error "No JAR file found"
-          exit 1
+        if (-not $mainJar) {
+            $mainJar = $jarFiles | Select-Object -First 1
         }
-      displayName: 'Run Application'
+        
+        Write-Host "=== Running: $($mainJar.FullName) ==="
+        Write-Host "Java version:"
+        java -version
+        Write-Host "Starting application..."
+        Write-Host "=========================================="
+        
+        # Запускаем приложение
+        java -jar $mainJar.FullName
+      displayName: 'Run Java Application'
