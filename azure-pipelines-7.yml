@@ -5,71 +5,82 @@ pool:
   name: 'Pool'
 
 stages:
-- stage: Build
+- stage: Diagnose
   jobs:
-  - job: Build
+  - job: DebugMaven
     steps:
     - checkout: self
     
     - powershell: |
-        # Устанавливаем переменные
-        $MAVEN_PATH = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
-        $env:PATH = "$MAVEN_PATH;" + $env:PATH
+        Write-Host "================== DIAGNOSTICS =================="
         
-        Write-Host "=== Java Version ==="
-        java -version
-        
-        Write-Host "=== Maven Version ==="
+        # 1. Проверяем Maven
+        $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
+        $env:PATH = "$mavenPath;" + $env:PATH
+        Write-Host "1. Maven version:"
         mvn --version
         
-        Write-Host "=== Project Structure ==="
-        Get-ChildItem -Recurse -Depth 2
+        # 2. Проверяем структуру проекта
+        Write-Host "`n2. Project structure:"
+        Get-ChildItem -Recurse -Depth 3 | Select-Object FullName
         
-        Write-Host "=== Building with Maven ==="
-        mvn clean compile package -DskipTests
+        # 3. Проверяем pom.xml
+        Write-Host "`n3. Checking pom.xml:"
+        if (Test-Path "pom.xml") {
+            Write-Host "pom.xml exists"
+            # Показываем содержимое pom.xml
+            Get-Content pom.xml
+        } else {
+            Write-Host "ERROR: pom.xml not found!"
+            # Ищем любые pom.xml
+            Get-ChildItem -Filter "pom.xml" -Recurse
+        }
         
-        Write-Host "=== Build Results ==="
+        # 4. Проверяем есть ли Java исходники
+        Write-Host "`n4. Looking for Java source files:"
+        $javaFiles = Get-ChildItem -Filter "*.java" -Recurse
+        if ($javaFiles.Count -gt 0) {
+            Write-Host "Found $($javaFiles.Count) Java files:"
+            $javaFiles | Select-Object -First 5 | ForEach-Object { Write-Host "  - $($_.FullName)" }
+        } else {
+            Write-Host "WARNING: No Java source files found!"
+        }
+        
+        # 5. Пробуем собрать с максимальной детализацией
+        Write-Host "`n5. Trying Maven build with verbose output:"
+        mvn clean compile -X  # -X для максимальной детализации
+        
+        Write-Host "`n6. Checking if target directory was created:"
         if (Test-Path "target") {
-            Get-ChildItem -Path "target" -Recurse | Format-Table Name, Length, LastWriteTime
-            
-            # Копируем JAR файлы в staging directory
-            $stagingDir = "$(Build.ArtifactStagingDirectory)"
-            New-Item -ItemType Directory -Force -Path $stagingDir
-            
-            $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -Recurse
-            foreach ($jar in $jarFiles) {
-                Copy-Item -Path $jar.FullName -Destination $stagingDir -Force
-                Write-Host "Copied: $($jar.Name)"
+            Write-Host "target directory exists"
+            Get-ChildItem -Path "target" -Recurse | Format-Table FullName, Length
+        } else {
+            Write-Host "ERROR: target directory NOT created"
+        }
+        
+        # 6. Пробуем создать JAR
+        Write-Host "`n7. Trying to create JAR:"
+        mvn package -DskipTests -e  # -e для показа ошибок
+        
+        Write-Host "`n8. Final check for JAR files:"
+        $jarFiles = Get-ChildItem -Filter "*.jar" -Recurse
+        if ($jarFiles.Count -gt 0) {
+            Write-Host "SUCCESS: Found $($jarFiles.Count) JAR file(s):"
+            $jarFiles | ForEach-Object { 
+                Write-Host "  - $($_.FullName) ($($_.Length) bytes)"
+                # Показываем содержимое JAR
+                Write-Host "    Contents:"
+                try {
+                    & "C:\Program Files\Java\jdk-*\bin\jar.exe" tf $_.FullName | Select-Object -First 5
+                } catch {
+                    Write-Host "    (Cannot list JAR contents)"
+                }
             }
         } else {
-            Write-Error "Build failed: target directory not created"
-            exit 1
+            Write-Host "ERROR: No JAR files created!"
+            Write-Host "Checking what's in target/classes:"
+            if (Test-Path "target\classes") {
+                Get-ChildItem -Path "target\classes" -Recurse | Select-Object -First 10
+            }
         }
-      displayName: 'Build with Maven'
-    
-    - publish: '$(Build.ArtifactStagingDirectory)'
-      artifact: 'java-app'
-      displayName: 'Publish JAR'
-
-- stage: Run
-  dependsOn: Build
-  jobs:
-  - job: Run
-    steps:
-    - download: current
-      artifact: 'java-app'
-    
-    - powershell: |
-        Write-Host "=== Finding JAR file ==="
-        $jarFile = Get-ChildItem -Path . -Filter "*.jar" -File | Select-Object -First 1
-        
-        if ($jarFile) {
-            Write-Host "Running: $($jarFile.FullName)"
-            Write-Host "========================================"
-            java -jar $jarFile.FullName
-        } else {
-            Write-Error "No JAR file found!"
-            Get-ChildItem -Path . -Recurse | Format-Table FullName
-            exit 1
-        }
-      displayName: 'Run Application'
+      displayName: 'Diagnose Maven Build'
