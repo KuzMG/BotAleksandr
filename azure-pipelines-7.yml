@@ -12,112 +12,56 @@ stages:
     - checkout: self
     
     - powershell: |
-        Write-Host "=== Setting up Maven ==="
+        # Настройка Maven
         $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
         $env:PATH = "$mavenPath;" + $env:PATH
         
-        Write-Host "=== Building project ==="
+        # Сборка
         mvn clean package -DskipTests
         
-        Write-Host "=== Checking target directory ==="
-        if (Test-Path "target") {
-            Write-Host "target directory exists"
-            $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -Recurse
-            Write-Host "JAR files found: $($jarFiles.Count)"
-            $jarFiles | ForEach-Object {
-                Write-Host "  - $($_.Name) at $($_.DirectoryName)"
-            }
-        } else {
-            Write-Error "target directory not created!"
-            exit 1
-        }
-      displayName: 'Build and Verify'
-    
-    - powershell: |
-        Write-Host "=== Copying JAR to staging directory ==="
-        
-        # Очищаем staging directory
-        $stagingDir = "$(Build.ArtifactStagingDirectory)"
-        if (Test-Path $stagingDir) {
-            Remove-Item -Path "$stagingDir\*" -Recurse -Force
-        } else {
-            New-Item -ItemType Directory -Force -Path $stagingDir
-        }
-        
-        # Находим и копируем JAR файлы
-        $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -Recurse -File
-        
-        if ($jarFiles.Count -eq 0) {
-            Write-Error "No JAR files found to copy!"
+        # Проверка
+        $jarFile = Get-ChildItem -Path "target" -Filter "*.jar" -File | Select-Object -First 1
+        if (-not $jarFile) {
+            Write-Error "JAR not created!"
             exit 1
         }
         
-        Write-Host "Copying $($jarFiles.Count) JAR file(s)..."
-        foreach ($jar in $jarFiles) {
-            $destPath = Join-Path $stagingDir $jar.Name
-            Copy-Item -Path $jar.FullName -Destination $destPath -Force
-            Write-Host "Copied: $($jar.Name) -> $destPath"
-        }
+        Write-Host "JAR created: $($jarFile.Name)"
         
-        # Проверяем что скопировалось
-        Write-Host "`n=== Staging directory contents ==="
-        Get-ChildItem -Path $stagingDir -Recurse | Format-Table FullName, Length
-      displayName: 'Copy JAR Files'
+        # Копируем JAR в специальную папку для артефактов
+        $artifactDir = "$(Pipeline.Workspace)/artifacts"
+        New-Item -ItemType Directory -Force -Path $artifactDir
+        Copy-Item -Path $jarFile.FullName -Destination $artifactDir -Force
+      displayName: 'Build JAR'
     
-    - task: PublishBuildArtifacts@1
-      displayName: 'Publish Artifact'
+    # Публикуем как pipeline artifact (не build artifact)
+    - task: PublishPipelineArtifact@1
       inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'java-bot-jar'
-        publishLocation: 'Container'
+        targetPath: '$(Pipeline.Workspace)/artifacts'
+        artifact: 'java-bot'
+        publishLocation: 'pipeline'
 
 - stage: Run
   dependsOn: Build
   jobs:
   - job: Run
     steps:
-    # Правильный синтаксис для download task
-    - download: current
-      artifact: java-bot-jar
-      displayName: 'Download artifact'
+    # Скачиваем pipeline artifact
+    - task: DownloadPipelineArtifact@2
+      inputs:
+        artifact: 'java-bot'
+        path: '$(Pipeline.Workspace)/downloaded'
     
     - powershell: |
-        Write-Host "=== Current working directory ==="
-        Write-Host "$(Get-Location)"
+        Write-Host "=== Downloaded files ==="
+        Get-ChildItem -Path "$(Pipeline.Workspace)/downloaded" -Recurse
         
-        Write-Host "`n=== ALL FILES (recursive) ==="
-        Get-ChildItem -Path . -Recurse | Format-Table FullName, Length
+        $jarFile = Get-ChildItem -Path "$(Pipeline.Workspace)/downloaded" -Filter "*.jar" -File | Select-Object -First 1
         
-        Write-Host "`n=== SPECIFICALLY LOOKING FOR .JAR FILES ==="
-        $jarFiles = Get-ChildItem -Path . -Filter "*.jar" -Recurse -File
-        
-        if ($jarFiles.Count -eq 0) {
-            Write-Host "NO JAR FILES FOUND! Listing all files with extensions:"
-            Get-ChildItem -Path . -Recurse -File | Group-Object Extension | Format-Table Name, Count
-            
-            Write-Host "`nFull directory tree:"
-            Get-ChildItem -Path . -Recurse | Select-Object FullName
-            exit 1
+        if ($jarFile) {
+            Write-Host "Running: $($jarFile.FullName)"
+            java -jar $jarFile.FullName
+        } else {
+            Write-Error "JAR not found in downloaded artifacts"
         }
-        
-        Write-Host "Found $($jarFiles.Count) JAR file(s):"
-        $jarFiles | ForEach-Object {
-            Write-Host "  - $($_.FullName) ($([math]::Round($_.Length/1KB, 2)) KB)"
-        }
-        
-        # Выбираем JAR для запуска
-        $mainJar = $jarFiles | 
-                   Where-Object { $_.Name -notmatch "(sources|javadoc|original)" } | 
-                   Select-Object -First 1
-        
-        if (-not $mainJar) {
-            $mainJar = $jarFiles[0]
-        }
-        
-        Write-Host "`n=== RUNNING: $($mainJar.Name) ==="
-        Write-Host "Full path: $($mainJar.FullName)"
-        Write-Host "========================================"
-        
-        # Запускаем приложение
-        java -jar $mainJar.FullName
-      displayName: 'Run Java Bot'
+      displayName: 'Run Bot'
