@@ -15,7 +15,22 @@ stages:
         Write-Host "Checking tools..."
         java -version
         mvn --version
+
+
+        Write-Host "=== Current PATH ==="
+        $env:PATH -split ';' | ForEach-Object { Write-Host $_ }
+        Write-Host "====================="
         
+        $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
+        $env:PATH = "$mavenPath;" + $env:PATH
+        [Environment]::SetEnvironmentVariable("PATH", $env:PATH, "Process")
+        
+        Write-Host "=== Updated PATH ==="
+        $env:PATH -split ';' | Select-Object -First 10 | ForEach-Object { Write-Host $_ }
+        Write-Host "====================="
+        
+        # Проверяем
+        mvn --version   
         Write-Host "Building application..."
         mvn clean package -DskipTests
         
