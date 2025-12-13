@@ -86,5 +86,5 @@ steps:
     
     # Запускаем бота
     Write-Host "Starting bot..."
-    java -jar $jarFile.FullName
+    java -jar $jarFile.FullName 7494523654:AAE2Dev9vATmV_XQIr4HdbBOjCGPOVQCq70
   displayName: 'Fix pom.xml and Run Telegram Bot'
