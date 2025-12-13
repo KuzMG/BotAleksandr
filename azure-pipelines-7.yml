@@ -4,60 +4,87 @@ trigger:
 pool:
   name: 'Pool'
 
-stages:
-- stage: BuildAndRun
-  displayName: 'Build and Run'
-  jobs:
-  - job: Execute
-    timeoutInMinutes: 30
-    steps:
-    - checkout: self
+steps:
+- checkout: self
+
+- powershell: |
+    Write-Host "=== Step 1: Fix pom.xml ==="
     
-    - powershell: |
-        Write-Host "=== Step 1: Setup Environment ==="
-        $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
-        $env:PATH = "$mavenPath;" + $env:PATH
-        
-        Write-Host "`n=== Step 2: Build Project ==="
-        mvn clean package -DskipTests
-        
-        Write-Host "`n=== Step 3: Check Build Results ==="
-        if (-not (Test-Path "target")) {
-            Write-Error "Build failed - target directory not created"
-            exit 1
-        }
-        
-        Write-Host "`n=== Step 4: Find JAR File ==="
-        $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -File
-        
-        if ($jarFiles.Count -eq 0) {
-            Write-Error "No JAR files created!"
-            Get-ChildItem -Path "target" -Recurse
-            exit 1
-        }
-        
-        Write-Host "Found $($jarFiles.Count) JAR file(s):"
-        $jarFiles | ForEach-Object {
-            Write-Host "  - $($_.Name) ($([math]::Round($_.Length/1KB, 2)) KB)"
-        }
-        
-        # Выбираем JAR для запуска
-        $mainJar = $jarFiles | 
+    # Читаем текущий pom.xml
+    $pomContent = Get-Content pom.xml -Raw
+    
+    # 1. Добавляем packaging если нет
+    if (-not ($pomContent -match "<packaging>")) {
+        $pomContent = $pomContent -replace "(<version>.*?</version>)", "`$1`n    <packaging>jar</packaging>"
+    }
+    
+    # 2. Исправляем maven-jar-plugin (добавляем <manifest>)
+    $pomContent = $pomContent -replace `
+        '<archive>\s*<mainClass>', `
+        '<archive>`n                        <manifest>`n                            <mainClass>'
+    
+    $pomContent = $pomContent -replace `
+        '</addClasspath>\s*</archive>', `
+        '</addClasspath>`n                        </manifest>`n                    </archive>'
+    
+    # Сохраняем исправленный pom.xml
+    Set-Content pom.xml $pomContent -Encoding UTF8
+    Write-Host "pom.xml fixed"
+    
+    Write-Host "`n=== Step 2: Show fixed pom.xml ==="
+    Get-Content pom.xml | Select-String -Pattern "(packaging|archive|manifest|mainClass)" -Context 2
+    
+    Write-Host "`n=== Step 3: Setup Maven ==="
+    $mavenPath = "D:\misha\Desktop\agent\apache-maven-3.9.11\bin"
+    $env:PATH = "$mavenPath;" + $env:PATH
+    
+    Write-Host "`n=== Step 4: Build with dependencies ==="
+    # Telegram бот требует зависимости в classpath
+    mvn clean compile assembly:single -DskipTests
+    
+    Write-Host "`n=== Step 5: Find JAR ==="
+    # Ищем fat JAR (со всеми зависимостями)
+    $jarFile = Get-ChildItem -Path "target" -Filter "*fat.jar" -File | Select-Object -First 1
+    
+    if (-not $jarFile) {
+        # Ищем обычный JAR
+        $jarFile = Get-ChildItem -Path "target" -Filter "*.jar" -File | 
                    Where-Object { $_.Name -notlike "*-original.*" } | 
                    Select-Object -First 1
-        
-        if (-not $mainJar) {
-            $mainJar = $jarFiles[0]
-        }
-        
-        Write-Host "`n=== Step 5: Run Application ==="
-        Write-Host "JAR: $($mainJar.FullName)"
-        Write-Host "Size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
-        Write-Host "========================================"
-        
-        # Запускаем приложение
-        Write-Host "Starting bot..."
-        java -jar $mainJar.FullName
-        
-        Write-Host "Bot has finished execution."
-      displayName: 'Build and Run Java Bot'
+    }
+    
+    if (-not $jarFile) {
+        Write-Error "No JAR file found!"
+        Write-Host "Target contents:"
+        Get-ChildItem -Path "target" -Recurse
+        exit 1
+    }
+    
+    Write-Host "JAR: $($jarFile.Name)"
+    Write-Host "Size: $([math]::Round($jarFile.Length/1KB, 2)) KB"
+    
+    Write-Host "`n=== Step 6: Check Manifest ==="
+    # Проверяем манифест
+    & "jar" xf $jarFile.FullName META-INF/MANIFEST.MF 2>$null
+    if (Test-Path "META-INF/MANIFEST.MF") {
+        Write-Host "Manifest content:"
+        Get-Content "META-INF/MANIFEST.MF"
+        Remove-Item -Path "META-INF" -Recurse -Force
+    }
+    
+    Write-Host "`n=== Step 7: Run Telegram Bot ==="
+    Write-Host "Note: Telegram bot needs BOT_TOKEN environment variable"
+    Write-Host "========================================"
+    
+    # Проверяем наличие токена (если задан)
+    if ($env:TELEGRAM_BOT_TOKEN) {
+        Write-Host "Bot token found (first 10 chars): $($env:TELEGRAM_BOT_TOKEN.Substring(0, [math]::Min(10, $env:TELEGRAM_BOT_TOKEN.Length)))..."
+    } else {
+        Write-Host "WARNING: TELEGRAM_BOT_TOKEN environment variable not set"
+        Write-Host "The bot may fail if it requires token on startup"
+    }
+    
+    # Запускаем бота
+    Write-Host "Starting bot..."
+    java -jar $jarFile.FullName
+  displayName: 'Fix pom.xml and Run Telegram Bot'
