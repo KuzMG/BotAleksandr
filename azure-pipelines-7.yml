@@ -24,43 +24,49 @@ stages:
         mvn --version
         
         Write-Host "`n=== Step 2: Build Project ==="
-        # Собираем с игнорированием тестов и некоторых предупреждений
-        mvn clean package -DskipTests -Dcheckstyle.skip=true -Dspotbugs.skip=true
+        # ПРАВИЛЬНАЯ КОМАНДА - каждый -D параметр отдельно
+        mvn clean package -DskipTests
         
         Write-Host "`n=== Step 3: Find JAR File ==="
-        # Ищем все JAR файлы в target
-        $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -File
-        
-        if ($jarFiles.Count -eq 0) {
-            Write-Error "ERROR: No JAR files found in target directory!"
-            Write-Host "Checking what's in target:"
-            Get-ChildItem -Path "target" -Recurse
+        # Сначала проверяем, создалась ли target директория
+        if (Test-Path "target") {
+            Write-Host "Target directory exists"
+            $jarFiles = Get-ChildItem -Path "target" -Filter "*.jar" -File
+            
+            if ($jarFiles.Count -eq 0) {
+                Write-Error "ERROR: No JAR files found in target directory!"
+                Write-Host "Checking what's in target:"
+                Get-ChildItem -Path "target" -Recurse
+                exit 1
+            }
+            
+            Write-Host "Found $($jarFiles.Count) JAR file(s):"
+            $jarFiles | ForEach-Object {
+                Write-Host "  - $($_.Name) ($([math]::Round($_.Length/1KB, 2)) KB)"
+            }
+            
+            # Выбираем основной JAR (исключаем *-original.jar и другие)
+            $mainJar = $jarFiles | 
+                       Where-Object { 
+                           $_.Name -notmatch "(sources|javadoc|original|tests)" -and
+                           $_.Extension -eq '.jar'
+                       } | 
+                       Select-Object -First 1
+            
+            if (-not $mainJar) {
+                Write-Host "WARNING: No main JAR found, using first available"
+                $mainJar = $jarFiles[0]
+            }
+            
+            Write-Host "`n=== Step 4: Run Application ==="
+            Write-Host "JAR: $($mainJar.FullName)"
+            Write-Host "Size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
+            Write-Host "========================================"
+            
+            # Запускаем приложение
+            java -jar $mainJar.FullName
+        } else {
+            Write-Error "ERROR: Target directory not created! Build failed."
             exit 1
         }
-        
-        Write-Host "Found $($jarFiles.Count) JAR file(s):"
-        $jarFiles | ForEach-Object {
-            Write-Host "  - $($_.Name) ($([math]::Round($_.Length/1KB, 2)) KB)"
-        }
-        
-        # Выбираем основной JAR (исключаем *-original.jar и другие)
-        $mainJar = $jarFiles | 
-                   Where-Object { 
-                       $_.Name -notmatch "(sources|javadoc|original|tests)" -and
-                       $_.Extension -eq '.jar'
-                   } | 
-                   Select-Object -First 1
-        
-        if (-not $mainJar) {
-            Write-Host "WARNING: No main JAR found, using first available"
-            $mainJar = $jarFiles[0]
-        }
-        
-        Write-Host "`n=== Step 4: Run Application ==="
-        Write-Host "JAR: $($mainJar.FullName)"
-        Write-Host "Size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
-        Write-Host "========================================"
-        
-        # Запускаем приложение
-        java -jar $mainJar.FullName
       displayName: 'Build and Run Java Bot'
