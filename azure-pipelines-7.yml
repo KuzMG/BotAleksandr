@@ -9,7 +9,7 @@ stages:
   displayName: 'Build and Run'
   jobs:
   - job: Execute
-    timeoutInMinutes: 30  # Таймаут 30 минут
+    timeoutInMinutes: 30
     steps:
     - checkout: self
     
@@ -19,15 +19,9 @@ stages:
         $env:PATH = "$mavenPath;" + $env:PATH
         
         Write-Host "`n=== Step 2: Build Project ==="
-        # Собираем с выводом логов в файл
-        mvn clean package -DskipTests 2>&1 | Tee-Object -FilePath "maven-build.log"
+        mvn clean package -DskipTests
         
         Write-Host "`n=== Step 3: Check Build Results ==="
-        if (Test-Path "maven-build.log") {
-            Write-Host "Last 20 lines of build log:"
-            Get-Content "maven-build.log" | Select-Object -Last 20
-        }
-        
         if (-not (Test-Path "target")) {
             Write-Error "Build failed - target directory not created"
             exit 1
@@ -38,7 +32,6 @@ stages:
         
         if ($jarFiles.Count -eq 0) {
             Write-Error "No JAR files created!"
-            Write-Host "Target directory contents:"
             Get-ChildItem -Path "target" -Recurse
             exit 1
         }
@@ -62,32 +55,9 @@ stages:
         Write-Host "Size: $([math]::Round($mainJar.Length/1KB, 2)) KB"
         Write-Host "========================================"
         
-        # Запускаем приложение с логированием
-        $logFile = "application.log"
-        Write-Host "Output will be logged to: $logFile"
+        # Запускаем приложение
+        Write-Host "Starting bot..."
+        java -jar $mainJar.FullName
         
-        # Запускаем в фоновом режиме с логированием
-        $process = Start-Process java -ArgumentList "-jar `"$($mainJar.FullName)`"" `
-                  -NoNewWindow -PassThru -RedirectStandardOutput $logFile -RedirectStandardError $logFile
-        
-        Write-Host "Application started with PID: $($process.Id)"
-        Write-Host "Waiting for 30 seconds to see initial output..."
-        
-        # Ждем и показываем начало логов
-        Start-Sleep -Seconds 30
-        
-        if (Test-Path $logFile) {
-            Write-Host "`n=== Application Log (first 50 lines) ==="
-            Get-Content $logFile | Select-Object -First 50
-        } else {
-            Write-Host "Log file not created yet"
-        }
-        
-        # Проверяем, жив ли процесс
-        if (Get-Process -Id $process.Id -ErrorAction SilentlyContinue) {
-            Write-Host "`nApplication is still running. Process will continue in background."
-            Write-Host "To stop manually, use: taskkill /PID $($process.Id) /F"
-        } else {
-            Write-Host "`nApplication has stopped."
-        }
+        Write-Host "Bot has finished execution."
       displayName: 'Build and Run Java Bot'
