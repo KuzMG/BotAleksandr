@@ -12,7 +12,7 @@ public class Main {
         try {
             System.setProperty("webdriver.chrome.driver", "chromedriver.exe");
             TelegramBotsLongPollingApplication botsApplication = new TelegramBotsLongPollingApplication();
-            BotSession session = botsApplication.registerBot(Config.botToken, new Bot());
+            BotSession session = botsApplication.registerBot(args[0], new Bot());
 
             System.out.println(session.isRunning());
         } catch (TelegramApiException e) {
